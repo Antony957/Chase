@@ -50,6 +50,6 @@ python run_full.py --dataset datasets/lift/ph/low_dim_v141.hdf5 --output_dir out
 # can
 python run_full.py --dataset datasets/can/ph/low_dim_v141.hdf5 --output_dir out/can/ --used_demo core_20 --task can  --noise_scale 0.01
 # square
-python run_full.py --dataset datasets/square/ph/low_dim_v141.hdf5 --output_dir out/square/ --used_demo core_20 --task square 
+python run_full.py --dataset datasets/square/ph/low_dim_v141.hdf5 --output_dir out/square/ --used_demo core_20 --task square --noise_scale 0.01
 
 ```
