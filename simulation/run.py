@@ -80,6 +80,7 @@ def run_trained_agent(args):
             traj_renderer=traj_renderer,
             abs_action=args.abs_action,
             rotation_transformer=rotation_transformer,
+            adv=args.enable_adv,
         )
         rollout_stats.append(stats)
         last_initial_state_dict = traj["initial_state_dict"]
@@ -249,6 +250,13 @@ if __name__ == "__main__":
         default=None,
         help="(optional) inference horizon",
     )
+
+    parser.add_argument(
+        "--enable_adv",
+        action='store_true',
+        default=False,
+    )
+
 
     parser.add_argument(
         "--high_noise_eval",

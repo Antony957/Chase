@@ -192,7 +192,7 @@ class DiffusionUNetPolicy(nn.Module):
 
         return trajectory
 
-    def predict_action(self, readout) -> Dict[str, torch.Tensor]:
+    def _predict_action_from_clean(self, readout) -> Dict[str, torch.Tensor]:
         B = readout.shape[0]
         T = self.horizon
         Da = self.action_dim
@@ -225,6 +225,38 @@ class DiffusionUNetPolicy(nn.Module):
         action_pred = sample[...,:Da]
 
         return action_pred
+
+    def predict_action(self, readout):
+        with torch.no_grad():
+            return self._predict_action_from_clean(readout)
+
+    def get_adversarial_readout(self, readout, eps=0.01, alpha=0.005, iters=5):
+        readout_orig = readout.detach()
+        # with torch.no_grad():
+        #     clean_action = self._predict_action_from_readout(readout_orig)
+
+        readout_adv = readout_orig.clone().detach()
+        readout_adv.requires_grad_(True)
+
+        for _ in range(iters):
+            action_pred = self._predict_action_from_readout(readout_adv)
+
+            loss = F.mse_loss(action_pred, clean_action)
+
+            grad = torch.autograd.grad(loss, readout_adv, retain_graph=False, create_graph=False)[0]
+
+            with torch.no_grad():
+                readout_adv += alpha * grad.sign()
+
+                delta = torch.clamp(readout_adv - readout_orig, min=-eps, max=eps)
+                readout_adv.copy_(readout_orig + delta)
+
+            readout_adv.requires_grad_(True)
+        
+        with torch.no_grad():
+            return self._predict_action_from_clean(readout_adv)
+
+
 
     # ========= training  ============
     def compute_loss(self, readout, actions):

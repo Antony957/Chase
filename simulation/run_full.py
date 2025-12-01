@@ -17,7 +17,7 @@ from robomimic_dataset_conversion import convert_rel_actions_to_abs
 from extract_useful_data import extract_useful_data
 from dataset_combine import combine_dataset
 
-def generate_training_cfg(task, used_demo, dataset_path_dict, abs_output_dir, seeds, prefix):
+def generate_training_cfg(task, used_demo, dataset_path, abs_output_dir, seeds, prefix):
     config_template_path = os.path.join("config_template/training", task + ".json")
     assert os.path.exists(config_template_path)
     with open(config_template_path, "r") as f:
@@ -27,7 +27,7 @@ def generate_training_cfg(task, used_demo, dataset_path_dict, abs_output_dir, se
         config = config_template.copy()
         config = EasyDict(config)
         config.seed = seed
-        config.dataset.params.path = dataset_path_dict[seed]
+        config.dataset.params.path = dataset_path
         config.dataset.params.train_filter_key = used_demo
         config.log_dir = os.path.join(abs_output_dir, "logs/{}_seed_{}".format(prefix, seed))
         config.resume_ckpt = None
@@ -37,11 +37,11 @@ def generate_training_cfg(task, used_demo, dataset_path_dict, abs_output_dir, se
         with open(config_path, "w") as f:
             json.dump(config, f, indent=4)
         logging.info("Generated training config {}_seed_{}.json".format(prefix, seed))
-        with h5py.File(dataset_path_dict[seed], "r") as f:
+        with h5py.File(dataset_path, "r") as f:
             num_demos = len(f["mask/{}".format(used_demo)])
             logging.info("Number of demos in {}: {}".format(used_demo, num_demos))
 
-def start_training(abs_output_dir, seeds, prefix, cuda_device=None):
+def start_training(abs_output_dir, seeds, prefix, adv=False, cuda_device=None):
     processes = []
     for i, seed in enumerate(seeds):
         config_name = "{}_seed_{}.json".format(prefix, seed)
@@ -59,7 +59,7 @@ def start_training(abs_output_dir, seeds, prefix, cuda_device=None):
         process.wait()
     logging.info("All training is done")
 
-def start_evaluating(abs_output_dir, seeds, prefix, eval_specific_args="", eval_output_dir_name="eval", count_only=False, cuda_device=None):
+def start_evaluating(abs_output_dir, seeds, prefix, eval_specific_args="", eval_output_dir_name="eval", count_only=False, cuda_device=None, adv=False):
     processes = []
     eval_log_dir_dict = {}
     for i, seed in enumerate(seeds):
@@ -70,16 +70,22 @@ def start_evaluating(abs_output_dir, seeds, prefix, eval_specific_args="", eval_
         eval_log_id = trys[-1]
         eval_log_dir = os.path.join(abs_output_dir, "logs", eval_dataset_id, eval_log_id)
         eval_log_dir_dict[eval_dataset_id] = eval_log_dir
-        if not count_only and not os.path.exists(os.path.join(eval_log_dir, eval_output_dir_name)):
+        if not count_only:
             eval_ckpt = "policy_last"
-            rollout_args = "--n_rollouts 500 --seed 233 --try_times 5 --abs_action"
+            rollout_args = "--n_rollouts 200 --seed 233 --try_times 5 --abs_action"
+            dataset_name = "demo.hdf5"
+            if adv:
+                rollout_args += " --enable_adv"
+                dataset_name = "demo_adv.hdf5"
+
             extra_args = "--dataset_obs --render_traj --return_intermediate"
-            cmd = "CUDA_VISIBLE_DEVICES={} python run.py --agent {} --config {} {} --dataset_path {}/demo.hdf5 --video_dir {} {} {}".format(
+            cmd = "CUDA_VISIBLE_DEVICES={} python run.py --agent {} --config {} {} --dataset_path {}/{} --video_dir {} {} {}".format(
                 0 if cuda_device is None else cuda_device[i%len(cuda_device)],
                 os.path.join(abs_output_dir, "logs", eval_dataset_id, eval_log_id, "ckpt", eval_ckpt + ".ckpt"),
                 os.path.join(abs_output_dir, "logs", eval_dataset_id, eval_log_id, "config.json"),
                 rollout_args,
                 os.path.join(eval_log_dir, eval_output_dir_name),
+                dataset_name,
                 os.path.join(eval_log_dir, eval_output_dir_name),
                 extra_args,
                 eval_specific_args
@@ -108,21 +114,27 @@ def start_evaluating(abs_output_dir, seeds, prefix, eval_specific_args="", eval_
     logging.info("Success rate std: {}".format(np.std(success_rate_list)))
     return eval_log_dir_dict
 
-def start_extracting_useful_data(eval_log_dir_dict, seeds, prefix, eval_output_dir_name="eval"):
+def start_extracting_useful_data(eval_path, seeds, prefix, eval_output_dir_name="eval"):
     for seed in seeds:
-        eval_demo_path = os.path.join(eval_log_dir_dict["{}_seed_{}".format(prefix, seed)], eval_output_dir_name, "demo.hdf5")
+        eval_demo_path = os.path.join(eval_path, eval_output_dir_name, "demo_adv.hdf5")
+        print(eval_demo_path)
         assert os.path.exists(eval_demo_path)
         same_init_state_repeated_times = 5
         extract_useful_data(eval_demo_path, "success", same_init_state_repeated_times, threshold=1.1)
-        extract_useful_data(eval_demo_path, "sr_lss_0.9", same_init_state_repeated_times, threshold=0.9)
-        extract_useful_data(eval_demo_path, "sr_lss_0.5", same_init_state_repeated_times, threshold=0.5)
         extract_useful_data(eval_demo_path, "sr_lss_0.3", same_init_state_repeated_times, threshold=0.3)
+        extract_useful_data(eval_demo_path, "sr_lss_0.7", same_init_state_repeated_times, threshold=0.7)
+        extract_useful_data(eval_demo_path, "sr_lss_0.5", same_init_state_repeated_times, threshold=0.5)
         logging.info("Extracted useful data from {}_seed_{}".format(prefix, seed))
 
-def start_combining_dataset(used_demo, core_dataset_path, eval_log_dir_dict, seeds, prefix, eval_output_dir_name="eval"):
+def start_generate_challenge_data(eval_path, seeds, prefix, eval_output_dir_name="eval"):
     for seed in seeds:
-        eval_demo_path = os.path.join(eval_log_dir_dict["{}_seed_{}".format(prefix, seed)], eval_output_dir_name, "demo.hdf5")
-        output_demo_path = os.path.join(eval_log_dir_dict["{}_seed_{}".format(prefix, seed)], eval_output_dir_name, "demo_plus_core.hdf5")
+        eval_demo_path = os.path.join(eval_path, eval_output_dir_name, "demo.hdf5")
+
+
+def start_combining_dataset(used_demo, core_dataset_path, eval_path, seeds, prefix, eval_output_dir_name="eval"):
+    for seed in seeds:
+        eval_demo_path = os.path.join(eval_path, eval_output_dir_name, "demo_adv.hdf5")
+        output_demo_path = os.path.join(eval_path, eval_output_dir_name, "demo_plus_adv.hdf5")
         dataset_combine_cfg = EasyDict({
             "output": output_demo_path,
             "input": [
@@ -131,8 +143,8 @@ def start_combining_dataset(used_demo, core_dataset_path, eval_log_dir_dict, see
                     "map":[
                         [None, "all"],
                         ["sr_lss_0.3", "train_0.3"],
+                        ["sr_lss_0.7", "train_0.7"],
                         ["sr_lss_0.5", "train_0.5"],
-                        ["sr_lss_0.9", "train_0.9"],
                         ["success", "train_success"]
                     ]
                 }, 
@@ -141,8 +153,8 @@ def start_combining_dataset(used_demo, core_dataset_path, eval_log_dir_dict, see
                     "map":[
                         [used_demo, "all"],
                         [used_demo, "train_0.3"],
+                        [used_demo, "train_0.7"],
                         [used_demo, "train_0.5"],
-                        [used_demo, "train_0.9"],
                         [used_demo, "train_success"]
                     ]
                 }
@@ -151,7 +163,7 @@ def start_combining_dataset(used_demo, core_dataset_path, eval_log_dir_dict, see
         combine_dataset(dataset_combine_cfg)
         logging.info("Combined dataset {}_seed_{} and core".format(prefix, seed))
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -184,7 +196,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--seeds",
-        default=None,
+        default=[233],
         type=int,
         nargs="+",
         help="every given seed will be tested",
@@ -200,17 +212,12 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--noise_scale",
-        default=0.5,    # 0.5 for image, 0.01 for low_dim
+        default=0.01,    # 0.5 for image, 0.01 for low_dim
         type=float,
         help="noise scale",
     )
 
     args = parser.parse_args()
-
-    if args.seeds is None:
-        seeds = [233, 2333, 23333, 233333]
-    else:
-        seeds = args.seeds
 
     # set up logging
     abs_output_dir = os.path.abspath(args.output_dir)
@@ -262,76 +269,49 @@ if __name__ == "__main__":
     abs_core_path = os.path.abspath(core_path)
 
     # generate training configs
-    dataset_path_dict = {seed: abs_core_path for seed in seeds}
-    generate_training_cfg(args.task, args.used_demo, dataset_path_dict, abs_output_dir, seeds, "round_0")
-
+    # generate_training_cfg(args.task, args.used_demo, abs_core_path, abs_output_dir, args.seeds, "base")
     # start training
-    start_training(abs_output_dir, seeds, "round_0", cuda_device=args.cuda_device)
-    
-    eval_log_dir_dict = {}
+    # start_training(abs_output_dir, args.seeds, "base", cuda_device=args.cuda_device)
 
-    # round 0 
+    eval_output_path = os.path.join(abs_output_dir)
 
-    # evaluate the trained models
-    eval_log_dir_dict.update(start_evaluating(abs_output_dir, seeds, "round_0", cuda_device=args.cuda_device))#, eval_specific_args="--num_inference_steps 100")) # NOTE: remember to change this
+    # evaluate noisy demos (for sime)
+    # start_evaluating(abs_output_dir, args.seeds, "base", eval_specific_args="--enable_exploration --tau1 0.0 --tau2 1.0 --noise_scale {}".format(args.noise_scale), eval_output_dir_name=eval_output_path, cuda_device=args.cuda_device)
+    # generate challenge data
+    start_evaluating(abs_output_dir, args.seeds, "base", eval_specific_args="--enable_exploration --tau1 0.0 --tau2 1.0 --noise_scale {}".format(args.noise_scale), eval_output_dir_name=eval_output_path, cuda_device=args.cuda_device, adv=True)
 
-    # extract useful data
-    start_extracting_useful_data(eval_log_dir_dict, seeds, "round_0")
-
-    # combine dataset
-    start_combining_dataset(args.used_demo, abs_core_path, eval_log_dir_dict, seeds, "round_0")
+    # extract noisy data
+    start_extracting_useful_data(eval_output_path, args.seeds, "base", eval_output_dir_name="")
+    start_combining_dataset(args.used_demo, abs_core_path, eval_output_path, args.seeds, "sime", eval_output_dir_name="")
 
 
+    # # base eval
+    # start_evaluating(abs_output_dir, args.seeds, "base", cuda_device=args.cuda_device)
 
-    # sime
+    # # sime train
+    # sime_dataset = os.path.join(eval_output_path, "demo_plus_core.hdf5")
+    sime_dataset = os.path.join(eval_output_path, "demo_plus_adv.hdf5")
 
-    eval_output_dir_name = "sime_0.0-1.0-{}".format(args.noise_scale)
+    print(sime_dataset)
+    generate_training_cfg(args.task, "train_0.3", sime_dataset, abs_output_dir, args.seeds, "sime")
 
-    # evaluate the trained models
-    eval_log_dir_dict.update(start_evaluating(abs_output_dir, seeds, "round_0", eval_specific_args="--enable_exploration --tau1 0.0 --tau2 1.0 --noise_scale {}".format(args.noise_scale), eval_output_dir_name=eval_output_dir_name, cuda_device=args.cuda_device))
+    start_training(abs_output_dir, args.seeds, "sime", cuda_device=args.cuda_device)
 
-    # extract useful data
-    start_extracting_useful_data(eval_log_dir_dict, seeds, "round_0", eval_output_dir_name=eval_output_dir_name)
-
-    # combine dataset
-    start_combining_dataset(args.used_demo, abs_core_path, eval_log_dir_dict, seeds, "round_0", eval_output_dir_name=eval_output_dir_name)
-
-
-
-    # round 1
-
-    # generate training configs for the second round
-    dataset_path_dict = {
-        seed: os.path.join(eval_log_dir_dict["round_0_seed_{}".format(seed)], "eval", "demo_plus_core.hdf5") 
-        for seed in seeds
-    }
-    generate_training_cfg(args.task, "train_0.5", dataset_path_dict, abs_output_dir, seeds, "round_1_0.5")
-
-    # start training for the second round
-    start_training(abs_output_dir, seeds, "round_1_0.5", cuda_device=args.cuda_device)
-
-    # evaluate the trained models for the second round
-    eval_log_dir_dict.update(start_evaluating(abs_output_dir, seeds, "round_1_0.5", cuda_device=args.cuda_device))
+    # sime eval
+    start_evaluating(abs_output_dir, args.seeds, "sime", cuda_device=args.cuda_device)
 
 
+    # # chase train
+    # start_evaluating(abs_output_dir, seeds, "chase", eval_specific_args="--enable_adv --noise_scale {}".format(args.noise_scale), eval_output_dir_name=eval_output_dir_name, cuda_device=args.cuda_device)
+    # # extract useful data
+    # start_extracting_useful_data(eval_output_path, args.seeds, "chase", eval_output_dir_name="chase")
+    # start_combining_dataset(args.used_demo, abs_core_path, eval_output_path, args.seeds, "chase", eval_output_dir_name="chase")
 
-    # round 1 sime
+    # generate_training_cfg(args.task, args.used_demo, abs_core_path, abs_output_dir, args.seeds, "round_0")
+    # start_training(abs_output_dir, args.seeds, "round_1", cuda_device=args.cuda_device)
 
-    sime_dir_name = "sime_0.0-1.0-{}".format(args.noise_scale)
-
-    # generate training configs for the second round
-    dataset_path_dict = {
-        seed: os.path.join(eval_log_dir_dict["round_0_seed_{}".format(seed)], sime_dir_name, "demo_plus_core.hdf5") 
-        for seed in seeds
-    }
-    generate_training_cfg(args.task, "train_0.5", dataset_path_dict, abs_output_dir, seeds, "round_1_{}_0.5".format(sime_dir_name))
-
-    # start training for the second round
-    start_training(abs_output_dir, seeds, "round_1_{}_0.5".format(sime_dir_name), cuda_device=args.cuda_device)
-
-    # evaluate the trained models for the second round
-    eval_log_dir_dict.update(start_evaluating(abs_output_dir, seeds, "round_1_{}_0.5".format(sime_dir_name), cuda_device=args.cuda_device))
+    # # chase eval noisy
+    # start_evaluating(abs_output_dir, args.seeds, "round_0", cuda_device=args.cuda_device)
 
 
-
-    logging.info("All done. This is the end of the script.")
+main()

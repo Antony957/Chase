@@ -15,7 +15,7 @@
         }
     },
     "batch_size": 64,
-    "num_workers": 24,
+    "num_workers": 4,
     "num_iters_per_epoch": 100,
     "policy": {
         "name": "DP",
@@ -46,7 +46,7 @@
     "optimizer": {
         "name": "AdamW",
         "params": {
-            "lr": 3e-4,
+            "lr": 2e-3,
             "betas": [0.95, 0.999], 
             "weight_decay": 1e-6
         }
@@ -54,6 +54,6 @@
     "lr_scheduler": {
         "name": "cosine_with_warmup"
     },
-    "num_epochs": 1000,
+    "num_epochs": 200,
     "save_epochs": 50
 }

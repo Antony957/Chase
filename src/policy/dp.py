@@ -42,7 +42,7 @@ class DP(nn.Module):
     def forward(
             self, obs_dict, actions = None, 
             return_intermediate = False, 
-            weights = None
+            weights = None, adv=False
         ):
         readout = self.img_encoder(obs_dict)
         if return_intermediate:
@@ -93,7 +93,9 @@ class DP(nn.Module):
             # loss = self.action_decoder.compute_loss(readout, actions)
             loss = self.action_decoder.compute_weighted_loss(readout, actions, weights=weights, weight_type=self.weight_type)
             return loss
+        if adv:
+            action_pred = self.action_decoder.predict_action_with_adversarial(readout)
         else:
-            with torch.no_grad():
-                action_pred = self.action_decoder.predict_action(readout)
-            return action_pred
+            adv_readout = self.action_decoder.get_adversarial_readout(readout)
+            # action_pred = self.action_decoder.get_adversarial_readout(readout)
+            # return action_pred

@@ -31,6 +31,7 @@ def rollout(
     traj_renderer:TrajectoryRenderer=None,
     abs_action=False,
     rotation_transformer=None,
+    adv=False
 ):
     assert isinstance(env, EnvBase)
     assert isinstance(policy, RolloutPolicy) or isinstance(policy, RolloutDP)
@@ -351,14 +352,14 @@ class RolloutDP:
         v_pred = TensorUtils.to_numpy(v_pred).item()
         return v_pred
 
-    def __call__(self, ob):
+    def __call__(self, ob, adv=False):
         if self.ac is None or self.t >= self.inference_horizon:
             ob = self._prepare_observation(ob)
             if self.policy_name == "DP":
                 if self.return_intermediate:
-                    ac, intermediate_ac = self.policy(ob, return_intermediate=self.return_intermediate)
+                    ac, intermediate_ac = self.policy(ob, adv=adv, return_intermediate=self.return_intermediate)
                 else:
-                    ac = self.policy(ob)
+                    ac = self.policy(ob, adv=adv)
                 ac = TensorUtils.to_numpy(ac[0])
                 if self.return_intermediate:
                     intermediate_ac = np.array([TensorUtils.to_numpy(ac_i[0]) for ac_i in intermediate_ac])
